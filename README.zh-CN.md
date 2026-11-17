@@ -18,6 +18,13 @@ iPhone 原生 AI 陪读 App：本地 HTTP 服务接收 Kindle 当前页，Apple 
 - **平滑文字输出**：缓冲追加，不逐 token 抖动；
 - **橘猫 UI**：自定义 App 图标和背景。
 
+## 宣传视频
+
+<a href="docs/media/promo-zh.mp4"><img src="docs/media/cover-zh.png" width="640" alt="橘猫陪读宣传片"></a>
+
+[观看 45 秒宣传片（MP4）](docs/media/promo-zh.mp4) · [GIF 预览](docs/media/promo-zh.gif)
+
+
 ## 已验证
 
 | 项目 | 值 |
