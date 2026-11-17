@@ -20,9 +20,9 @@ A native iPhone AI reading companion for Kindle + KOReader. The iPhone hosts a s
 
 ## Demo
 
-<a href="docs/media/promo-zh.mp4"><img src="docs/media/cover-zh.png" width="640" alt="Reading Companion promo"></a>
+<a href="docs/media/promo-zh.mp4"><img src="docs/media/promo-zh.gif" width="640" alt="Reading Companion demo"></a>
 
-[Watch the 45-second promo (MP4)](docs/media/promo-zh.mp4) · [GIF preview](docs/media/promo-zh.gif)
+[Watch the 45-second promo (MP4)](docs/media/promo-zh.mp4)
 
 
 ## Tested
