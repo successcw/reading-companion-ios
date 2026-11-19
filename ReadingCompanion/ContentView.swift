@@ -15,6 +15,7 @@ struct ContentView: View {
     @State private var pendingText = ""
     @State private var revealTimer: Timer?
     @State private var isThinking = false
+    @State private var responseID: UUID?
     @State private var status = "正在准备…"
     @State private var showSettings = false
     @State private var address = ""
@@ -231,18 +232,18 @@ struct ContentView: View {
                     .foregroundStyle(ink.opacity(0.45))
             }
             Spacer()
-            if tts.isSpeaking {
+            if isThinking || tts.isSpeaking {
                 Button {
-                    tts.stop()
-                    speech.prepare()
+                    stopResponding()
                 } label: {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(orange)
-                        .frame(width: 30, height: 30)
-                        .background(.white.opacity(0.7), in: Circle())
+                        .frame(width: 34, height: 34)
+                        .background(.white.opacity(0.75), in: Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("停止回答")
             } else {
                 micControl
             }
@@ -254,42 +255,24 @@ struct ContentView: View {
     }
 
     private var micControl: some View {
-        Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(.white)
-            .frame(width: 38, height: 38)
-            .background(orange, in: Circle())
-            .contentShape(Circle())
-            .opacity(isThinking || speech.isTranscribing ? 0.45 : 1)
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onEnded { value in
-                        guard !isThinking, !speech.isTranscribing else { return }
-                        if speech.isRecording && value.translation.height < -40 {
-                            speech.cancelRecording()
-                            return
-                        }
-                        let isTap = abs(value.translation.height) < 10
-                            && abs(value.translation.width) < 10
-                        if isTap {
-                            if speech.isRecording {
-                                speech.endRecording()
-                            } else {
-                                speech.beginRecording()
-                            }
-                        }
-                    }
-            )
-            .accessibilityAddTraits(.isButton)
-            .accessibilityLabel(speech.isRecording ? "发送，上滑取消" : "开始录音")
-            .accessibilityAction {
-                guard !isThinking, !speech.isTranscribing else { return }
-                if speech.isRecording {
-                    speech.endRecording()
-                } else {
-                    speech.beginRecording()
-                }
+        Button {
+            guard !isThinking, !speech.isTranscribing else { return }
+            if speech.isRecording {
+                speech.endRecording()
+            } else {
+                speech.beginRecording()
             }
+        } label: {
+            Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(orange, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .opacity(isThinking || speech.isTranscribing ? 0.45 : 1)
+        .disabled(isThinking || speech.isTranscribing)
+        .accessibilityLabel(speech.isRecording ? "发送" : "开始录音")
     }
 
     private var waveBars: some View {
@@ -317,9 +300,9 @@ struct ContentView: View {
     }
 
     private var hintText: String {
-        if isThinking { return "只基于你已读到的内容" }
-        if tts.isSpeaking { return "轻点停止朗读" }
-        if speech.isRecording { return "再点发送 · 上滑取消" }
+        if isThinking { return "点右侧停止可打断" }
+        if tts.isSpeaking { return "轻点停止回答" }
+        if speech.isRecording { return "再点一下发送" }
         if speech.isTranscribing { return "正在识别…" }
         return "点麦克风开始说话"
     }
@@ -387,6 +370,21 @@ struct ContentView: View {
         revealTimer = nil
     }
 
+    private func stopResponding() {
+        llm.cancel()
+        responseID = nil
+        isThinking = false
+        stopRevealTimer()
+        pendingText = ""
+        tts.stop()
+        if let id = assistantID, let index = turns.firstIndex(where: { $0.id == id }),
+           turns[index].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            turns.remove(at: index)
+        }
+        assistantID = nil
+        speech.prepare()
+    }
+
     private func handleUtterance(_ text: String) {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return }
@@ -399,6 +397,8 @@ struct ContentView: View {
         stopRevealTimer()
         isThinking = true
         speech.pause()
+        let requestID = UUID()
+        responseID = requestID
 
         tts.beginStreaming {
             assistantID = nil
@@ -409,12 +409,15 @@ struct ContentView: View {
                                model: model,
                                apiKey: apiKey)
         llm.stream(turns: turns, context: context, config: config) { delta in
+            guard responseID == requestID else { return }
             pendingText += delta
             if revealTimer == nil {
                 startRevealTimer()
             }
             tts.appendStreaming(delta)
         } onDone: { result in
+            guard responseID == requestID else { return }
+            responseID = nil
             isThinking = false
             switch result {
             case .success:

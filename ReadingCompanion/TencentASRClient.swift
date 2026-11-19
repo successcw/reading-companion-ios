@@ -46,6 +46,9 @@ final class TencentASRClient {
             return
         }
 
+        // Keep the request to the documented core fields. Optional filters
+        // vary by API version; unsupported keys make Tencent reject the whole
+        // request with UnknownParameter.
         let payload: [String: Any] = [
             "ProjectId": 0,
             "SubServiceType": 2,
@@ -53,13 +56,7 @@ final class TencentASRClient {
             "SourceType": 1,
             "VoiceFormat": "wav",
             "Data": wav.base64EncodedString(),
-            "DataLen": wav.count,
-            "VadSwitch": 0,
-            "FilterDirty": 0,
-            "FilterModal": 0,
-            "FilterPunc": 1,
-            "ConvertNumMode": 1,
-            "WordInfo": 0
+            "DataLen": wav.count
         ]
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             completion(.failure(TencentASRError.invalidResponse))
@@ -81,7 +78,7 @@ final class TencentASRClient {
             hashedPayload
         ].joined(separator: "\n")
 
-        let credentialScope = "\(date)/\(config.region)/\(service)/tc3_request"
+        let credentialScope = "\(date)/\(service)/tc3_request"
         let stringToSign = [
             "TC3-HMAC-SHA256",
             "\(timestamp)",
@@ -119,12 +116,14 @@ final class TencentASRClient {
                 return
             }
             guard http.statusCode == 200, let data else {
+                print("TencentASR: HTTP \(http.statusCode)")
                 completion(.failure(TencentASRError.http(http.statusCode)))
                 return
             }
             do {
                 let decoded = try JSONDecoder().decode(APIResponse.self, from: data)
                 if let apiError = decoded.response.error {
+                    print("TencentASR: API \(apiError.code) \(apiError.message)")
                     completion(.failure(TencentASRError.api(code: apiError.code, message: apiError.message)))
                     return
                 }

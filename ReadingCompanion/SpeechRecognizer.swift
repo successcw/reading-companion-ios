@@ -34,6 +34,9 @@ final class SpeechRecognizer: NSObject, ObservableObject {
     private var converter: AVAudioConverter?
     private var converterInputFormat: AVAudioFormat?
     private var capturePCM = Data()
+    private var recorder: AVAudioRecorder?
+    private var recorderURL: URL?
+    private var meterTimer: Timer?
     private var recordingStarted = Date()
     private var lastLog = Date.distantPast
 
@@ -54,6 +57,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
     // is recording; never leave the engine in a half-started state.
     private var retryWork: DispatchWorkItem?
     private var retryDelay: TimeInterval = 0.5
+    private var suppressRouteChangesUntil = Date.distantPast
     private var observers: [NSObjectProtocol] = []
 
     private var tencentConfig: TencentASRConfig {
@@ -169,12 +173,14 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         transcript = ""
         capturePCM.removeAll()
         recordingStarted = Date()
-        if !useTencent {
-            beginAppleRequest()
-        }
-        status = useTencent ? "录音中，点一下发送" : "识别中，点一下发送"
         wantsRecording = true
-        activateAndStart()
+        if useTencent {
+            startTencentRecorder()
+        } else {
+            beginAppleRequest()
+            status = "识别中，点一下发送"
+            activateAndStart()
+        }
     }
 
     func endRecording() {
@@ -196,14 +202,15 @@ final class SpeechRecognizer: NSObject, ObservableObject {
 
         isTranscribing = true
         if useTencent {
-            let pcm = capturePCM
-            capturePCM.removeAll()
+            recorder?.stop()
+            let wav = recorderURL.flatMap { try? Data(contentsOf: $0) } ?? Data()
+            cleanupRecorder()
             stopEngineAndDeactivate()
-            guard !pcm.isEmpty else {
+            guard !wav.isEmpty else {
                 status = "没有录到声音，点一下重试"
                 return
             }
-            let wav = PCM16WAV.make(from: pcm)
+            print("ASR: Tencent upload wav=\(wav.count) bytes duration=\(String(format: "%.2f", duration))s")
             guard wav.count <= 3_000_000 else {
                 status = "录音太长，请分句说"
                 return
@@ -216,6 +223,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
                     case let .success(text):
                         self.deliver(text)
                     case let .failure(error):
+                        print("ASR: Tencent error \(error.localizedDescription)")
                         self.isTranscribing = false
                         self.stopEngineAndDeactivate()
                         self.level = 0
@@ -229,24 +237,6 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             status = "识别中…"
             scheduleFinalWatchdog()
         }
-    }
-
-    /// Abort an in-progress recording without uploading or sending anything.
-    func cancelRecording() {
-        guard isRecording else { return }
-        paused = false
-        wantsRecording = false
-        isRecording = false
-        isListening = false
-        isTranscribing = false
-        pendingStart = false
-        retryWork?.cancel()
-        retryWork = nil
-        resetAppleRequest(status: "已取消")
-        stopEngineAndDeactivate()
-        level = 0
-        status = "已取消"
-        print("ASR: cancelled")
     }
 
     private func deliver(_ raw: String) {
@@ -385,6 +375,66 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         }
     }
 
+    private func startTencentRecorder() {
+        cleanupRecorder()
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playAndRecord, mode: .measurement,
+                                    options: [.defaultToSpeaker])
+            try session.setActive(true)
+            if session.currentRoute.inputs.first?.portType != .builtInMic,
+               let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                try? session.setPreferredInput(builtIn)
+            }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("asr-\(UUID().uuidString).wav")
+            let settings: [String: Any] = [
+                AVFormatIDKey: Int(kAudioFormatLinearPCM),
+                AVSampleRateKey: 16_000,
+                AVNumberOfChannelsKey: 1,
+                AVLinearPCMBitDepthKey: 16,
+                AVLinearPCMIsFloatKey: false,
+                AVLinearPCMIsBigEndianKey: false,
+                AVLinearPCMIsNonInterleaved: false
+            ]
+            let recorder = try AVAudioRecorder(url: url, settings: settings)
+            recorder.isMeteringEnabled = true
+            guard recorder.record() else {
+                throw NSError(domain: "ASR", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "录音启动失败"])
+            }
+            self.recorder = recorder
+            self.recorderURL = url
+            meterTimer?.invalidate()
+            meterTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+                guard let self, let recorder = self.recorder else { return }
+                recorder.updateMeters()
+                let db = recorder.averagePower(forChannel: 0)
+                let normalized = max(0, min(1, (db + 50) / 50))
+                DispatchQueue.main.async { self.level = CGFloat(normalized) }
+            }
+            status = "录音中，点一下发送"
+            print("ASR: recorder started \(url.lastPathComponent)")
+        } catch {
+            wantsRecording = false
+            isRecording = false
+            isListening = false
+            status = "麦克风启动失败"
+            print("ASR: recorder failed \(error)")
+        }
+    }
+
+    private func cleanupRecorder() {
+        meterTimer?.invalidate()
+        meterTimer = nil
+        recorder?.stop()
+        recorder = nil
+        if let recorderURL {
+            try? FileManager.default.removeItem(at: recorderURL)
+        }
+        recorderURL = nil
+    }
+
     private func appendPCM(_ buffer: AVAudioPCMBuffer) {
         let inputFormat = buffer.format
         if converter == nil || converterInputFormat?.sampleRate != inputFormat.sampleRate
@@ -434,13 +484,15 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             try session.setCategory(.playAndRecord, mode: .measurement,
                                     options: [.defaultToSpeaker])
             try session.setActive(true)
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            if session.currentRoute.inputs.first?.portType != .builtInMic,
+               let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
                 try? session.setPreferredInput(builtIn)
             }
             installTapIfNeeded()
             engine.prepare()
             try engine.start()
             retryDelay = 0.5
+            suppressRouteChangesUntil = Date().addingTimeInterval(1.0)
             let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
             print("ASR: engine started, input \(inputs)")
             if isRecording {
@@ -510,8 +562,8 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             forName: AVAudioSession.routeChangeNotification,
             object: session,
             queue: .main
-        ) { [weak self] _ in
-            self?.handleRouteChange()
+        ) { [weak self] note in
+            self?.handleRouteChange(note)
         })
         observers.append(center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification,
@@ -536,6 +588,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             pendingStart = false
             retryWork?.cancel()
             retryWork = nil
+            cleanupRecorder()
             resetAppleRequest(status: "麦克风被占用，点一下重试")
             stopEngine()
             level = 0
@@ -549,14 +602,25 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         }
     }
 
-    private func handleRouteChange() {
-        guard wantsRecording, !paused else { return }
-        print("ASR: route changed, rebuilding input")
-        scheduleRetry(after: 0.2)
+    private func handleRouteChange(_ note: Notification) {
+        guard wantsRecording, !paused, !useTencent else { return }
+        guard Date() >= suppressRouteChangesUntil else { return }
+        guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
+        print("ASR: route change reason \(reason.rawValue)")
+        // Rebuilding on category/configuration changes caused by our own
+        // setCategory/setPreferredInput creates an endless restart loop and
+        // chops the utterance into pieces. Only react to real device changes.
+        switch reason {
+        case .oldDeviceUnavailable, .newDeviceAvailable:
+            scheduleRetry(after: 0.2)
+        default:
+            return
+        }
     }
 
     private func handleMediaServicesReset() {
-        guard wantsRecording, !paused else { return }
+        guard wantsRecording, !paused, !useTencent else { return }
         print("ASR: media services reset")
         retryDelay = 0.5
         scheduleRetry(after: 0.2)
@@ -573,6 +637,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         pendingStart = false
         retryWork?.cancel()
         retryWork = nil
+        cleanupRecorder()
         resetAppleRequest()
         stopEngineAndDeactivate()
         level = 0
