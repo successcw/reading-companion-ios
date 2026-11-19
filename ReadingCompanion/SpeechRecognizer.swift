@@ -8,7 +8,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
     @Published var isRecording: Bool = false
     @Published var isTranscribing: Bool = false
     @Published var level: CGFloat = 0
-    @Published var status: String = "点麦克风开始"
+    @Published var status: String = "点这里开始说话"
 
     var onUtterance: ((String) -> Void)?
 
@@ -86,7 +86,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         tencentRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? "ap-guangzhou" : region.trimmingCharacters(in: .whitespacesAndNewlines)
         if !isRecording {
-            status = "点麦克风开始"
+            status = "点这里开始说话"
         }
         print("ASR: engine \(useTencent ? "Tencent one-sentence" : "Apple Speech")")
     }
@@ -103,7 +103,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         switch session.recordPermission {
         case .granted:
             authorized = true
-            status = "点麦克风开始"
+            status = "点这里开始说话"
             if pendingStart { beginRecording() }
         case .denied:
             authorized = false
@@ -115,7 +115,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
                     self.authorized = granted
                     print("ASR: mic granted \(granted)")
                     if granted {
-                        self.status = "点麦克风开始"
+                        self.status = "点这里开始说话"
                         if self.pendingStart { self.beginRecording() }
                     } else {
                         self.status = "麦克风未授权"
@@ -253,7 +253,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             self.isListening = false
             self.isTranscribing = false
             self.level = 0
-            self.status = "点麦克风开始"
+            self.status = "点这里开始说话"
             self.transcript = ""
             if cleaned.count >= 1 {
                 self.onUtterance?(cleaned)
@@ -327,7 +327,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         isTranscribing = false
         level = 0
         DispatchQueue.main.async {
-            self.status = status ?? "点麦克风开始"
+            self.status = status ?? "点这里开始说话"
         }
     }
 
@@ -641,7 +641,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         resetAppleRequest()
         stopEngineAndDeactivate()
         level = 0
-        status = "点麦克风开始"
+        status = "点这里开始说话"
     }
 
     func pause() {

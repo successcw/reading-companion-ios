@@ -44,6 +44,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
     private var playerCompletion: (() -> Void)?
     private var systemCompletion: (() -> Void)?
     private var fallbackText = ""
+    private var playbackGeneration = 0
 
     override init() {
         let configuration = URLSessionConfiguration.default
@@ -140,19 +141,30 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
             self.queueRunning = false
             self.pump()
         }
+        let generation = playbackGeneration
         if let task = synthCache.removeValue(forKey: item.id) {
             Task { [weak self] in
                 guard let self else { return }
                 do {
                     let url = try await task.value
-                    await MainActor.run { self.playFile(url, completion: completion) }
+                    guard !Task.isCancelled,
+                          self.playbackGeneration == generation,
+                          self.isSpeaking else { return }
+                    await MainActor.run {
+                        self.playFile(url, completion: completion, generation: generation)
+                    }
                 } catch {
                     print("Edge TTS: failed \(error)")
-                    await MainActor.run { self.speakSystem(item.text, completion: completion) }
+                    guard !Task.isCancelled,
+                          self.playbackGeneration == generation,
+                          self.isSpeaking else { return }
+                    await MainActor.run {
+                        self.speakSystem(item.text, completion: completion, generation: generation)
+                    }
                 }
             }
         } else {
-            speakSystem(item.text, completion: completion)
+            speakSystem(item.text, completion: completion, generation: generation)
         }
     }
 
@@ -197,7 +209,8 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
         }
     }
 
-    private func playFile(_ url: URL, completion: @escaping () -> Void) {
+    private func playFile(_ url: URL, completion: @escaping () -> Void, generation: Int) {
+        guard playbackGeneration == generation, isSpeaking else { return }
         configurePlaybackSession()
         do {
             let player = try AVAudioPlayer(contentsOf: url)
@@ -208,11 +221,12 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
             player.play()
         } catch {
             print("TTS: player failed \(error)")
-            speakSystem(fallbackText, completion: completion)
+            speakSystem(fallbackText, completion: completion, generation: generation)
         }
     }
 
-    private func speakSystem(_ raw: String, completion: @escaping () -> Void) {
+    private func speakSystem(_ raw: String, completion: @escaping () -> Void, generation: Int) {
+        guard playbackGeneration == generation, isSpeaking else { return }
         let text = cleanForSpeech(raw)
         fallbackText = text
         configurePlaybackSession()
@@ -248,6 +262,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
     }
 
     func stop() {
+        playbackGeneration &+= 1
         synthesisTask?.cancel()
         synthesisTask = nil
         queue.forEach { synthCache[$0.id]?.cancel() }

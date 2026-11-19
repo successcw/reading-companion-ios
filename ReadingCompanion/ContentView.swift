@@ -222,7 +222,7 @@ struct ContentView: View {
 
     private var listeningPill: some View {
         HStack(spacing: 10) {
-            waveBars
+            catIndicator
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayStatus)
                     .font(.system(size: 14, weight: .medium, design: .rounded))
@@ -244,35 +244,52 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("停止回答")
-            } else {
-                micControl
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture {
+            toggleRecording()
+        }
     }
 
-    private var micControl: some View {
-        Button {
-            guard !isThinking, !speech.isTranscribing else { return }
-            if speech.isRecording {
-                speech.endRecording()
-            } else {
-                speech.beginRecording()
-            }
-        } label: {
-            Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 38, height: 38)
-                .background(orange, in: Circle())
+    private var catIndicator: some View {
+        TimelineView(.animation(minimumInterval: 0.16)) { timeline in
+            catFrame(at: timeline.date)
         }
-        .buttonStyle(.plain)
-        .opacity(isThinking || speech.isTranscribing ? 0.45 : 1)
-        .disabled(isThinking || speech.isTranscribing)
-        .accessibilityLabel(speech.isRecording ? "发送" : "开始录音")
+    }
+
+    private func catFrame(at date: Date) -> some View {
+        let tick = Int(date.timeIntervalSinceReferenceDate / 0.16)
+        let talking = tts.isSpeaking
+        let listening = speech.isRecording
+        let name: String
+        if talking {
+            name = tick % 2 == 0 ? "CatTalk1" : "CatTalk2"
+        } else if listening {
+            name = tick % 2 == 0 ? "CatListen1" : "CatListen2"
+        } else {
+            name = "CatIdle"
+        }
+        return Image(name)
+            .resizable()
+            .scaledToFill()
+            .frame(width: 40, height: 40)
+            .clipShape(Circle())
+            .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1.5))
+            .scaleEffect(talking && tick % 2 == 1 ? 1.04 : 1.0)
+    }
+
+    private func toggleRecording() {
+        guard !isThinking, !tts.isSpeaking, !speech.isTranscribing else { return }
+        if speech.isRecording {
+            speech.endRecording()
+        } else {
+            speech.beginRecording()
+        }
     }
 
     private var waveBars: some View {
@@ -304,7 +321,7 @@ struct ContentView: View {
         if tts.isSpeaking { return "轻点停止回答" }
         if speech.isRecording { return "再点一下发送" }
         if speech.isTranscribing { return "正在识别…" }
-        return "点麦克风开始说话"
+        return "轻点任意位置"
     }
 
     private func setup() {
