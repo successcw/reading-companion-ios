@@ -264,7 +264,7 @@ struct ContentView: View {
 
     private func catFrame(at date: Date) -> some View {
         let tick = Int(date.timeIntervalSinceReferenceDate / 0.16)
-        let talking = tts.isSpeaking
+        let talking = tts.isAudioActive
         let listening = speech.isRecording
         let name: String
         if talking {

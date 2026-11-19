@@ -9,6 +9,7 @@ struct EdgeVoiceOption: Identifiable, Hashable {
 
 final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     @Published var isSpeaking = false
+    @Published var isAudioActive = false
     @Published var spokenRange: NSRange?
     @Published var useEdge: Bool {
         didSet { UserDefaults.standard.set(useEdge, forKey: "tts_use_edge") }
@@ -171,6 +172,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
     private func finishQueue() {
         guard isSpeaking else { return }
         isSpeaking = false
+        isAudioActive = false
         spokenRange = nil
         let callback = queueOnFinish
         queueOnFinish = nil
@@ -219,6 +221,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
             self.player = player
             playerCompletion = completion
             player.play()
+            isAudioActive = true
         } catch {
             print("TTS: player failed \(error)")
             speakSystem(fallbackText, completion: completion, generation: generation)
@@ -239,6 +242,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
         utterance.rate = 0.47
         utterance.pitchMultiplier = 1.02
         utterance.volume = 1.0
+        isAudioActive = true
         system.speak(utterance)
     }
 
@@ -281,6 +285,7 @@ final class TTSPlayer: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpee
             system.stopSpeaking(at: .immediate)
         }
         isSpeaking = false
+        isAudioActive = false
         spokenRange = nil
     }
 
