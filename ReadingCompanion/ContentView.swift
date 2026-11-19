@@ -312,8 +312,7 @@ struct ContentView: View {
 
     private var displayStatus: String {
         if isThinking { return "在想…" }
-        // TTS 播放时只留猫咪动画和停止提示，不显示“在说”文字。
-        if tts.isSpeaking { return " " }
+        if tts.isSpeaking { return "说话中" }
         return speech.status
     }
 
