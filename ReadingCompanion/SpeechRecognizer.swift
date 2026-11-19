@@ -227,7 +227,13 @@ final class SpeechRecognizer: NSObject, ObservableObject {
                         self.isTranscribing = false
                         self.stopEngineAndDeactivate()
                         self.level = 0
-                        self.status = "识别失败：\(error.localizedDescription)"
+                        if case TencentASRError.emptyResult = error {
+                            // Silence: keep the UI quiet instead of showing a
+                            // scary parse error for an empty utterance.
+                            self.status = "点这里开始说话"
+                        } else {
+                            self.status = "识别失败：\(error.localizedDescription)"
+                        }
                     }
                 }
             }

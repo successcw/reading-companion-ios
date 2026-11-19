@@ -15,6 +15,7 @@ struct TencentASRConfig {
 enum TencentASRError: LocalizedError {
     case missingCredentials
     case invalidResponse
+    case emptyResult
     case api(code: String, message: String)
     case http(Int)
 
@@ -24,6 +25,8 @@ enum TencentASRError: LocalizedError {
             return "未配置腾讯云 SecretId / SecretKey"
         case .invalidResponse:
             return "腾讯云返回了无法解析的结果"
+        case .emptyResult:
+            return "没有识别到语音"
         case let .api(code, message):
             return "腾讯云识别失败（\(code)）：\(message)"
         case let .http(status):
@@ -129,7 +132,7 @@ final class TencentASRClient {
                 }
                 let text = decoded.response.result?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if text.isEmpty {
-                    completion(.failure(TencentASRError.invalidResponse))
+                    completion(.failure(TencentASRError.emptyResult))
                 } else {
                     completion(.success(text))
                 }
