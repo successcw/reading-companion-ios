@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add push-to-talk interaction: tap to record, tap again to send.
+- Add push-to-talk interaction: tap to record, tap again to send, swipe up to cancel.
 - Add Tencent Cloud one-sentence ASR, configurable in Settings and stored in the Keychain.
 - Rebuild the audio graph after microphone interruptions, route changes, and media-service resets.
 - Ignore errors from cancelled/stale speech recognition tasks.

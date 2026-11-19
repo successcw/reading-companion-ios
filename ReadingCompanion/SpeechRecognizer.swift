@@ -231,6 +231,24 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         }
     }
 
+    /// Abort an in-progress recording without uploading or sending anything.
+    func cancelRecording() {
+        guard isRecording else { return }
+        paused = false
+        wantsRecording = false
+        isRecording = false
+        isListening = false
+        isTranscribing = false
+        pendingStart = false
+        retryWork?.cancel()
+        retryWork = nil
+        resetAppleRequest(status: "已取消")
+        stopEngineAndDeactivate()
+        level = 0
+        status = "已取消"
+        print("ASR: cancelled")
+    }
+
     private func deliver(_ raw: String) {
         let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         print("ASR: final \(cleaned)")

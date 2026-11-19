@@ -9,7 +9,7 @@
 
 ## Features
 
-- **Push-to-talk**: tap the mic to start, tap again to send; no always-on VAD cutting off the first or last syllable.
+- **Push-to-talk**: tap the mic to start, tap again to send; swipe up on the mic to cancel. No always-on VAD cutting off the first or last syllable.
 - **Tencent Cloud one-sentence ASR**: optional, better Chinese accuracy; falls back to Apple Speech when no keys are configured.
 - **Local HTTP bridge**: receives book, chapter, page, progress, and page text from KOReader.
 - **OpenCode Go streaming**: `https://opencode.ai/zen/go/v1`, default model `deepseek-v4.1-flash`.

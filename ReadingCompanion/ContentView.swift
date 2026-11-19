@@ -244,28 +244,52 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Button {
-                    if speech.isRecording {
-                        speech.endRecording()
-                    } else {
-                        speech.beginRecording()
-                    }
-                } label: {
-                    Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 38, height: 38)
-                        .background(orange, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isThinking || speech.isTranscribing)
-                .accessibilityLabel(speech.isRecording ? "发送" : "开始录音")
+                micControl
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
+    }
+
+    private var micControl: some View {
+        Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 38, height: 38)
+            .background(orange, in: Circle())
+            .contentShape(Circle())
+            .opacity(isThinking || speech.isTranscribing ? 0.45 : 1)
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onEnded { value in
+                        guard !isThinking, !speech.isTranscribing else { return }
+                        if speech.isRecording && value.translation.height < -40 {
+                            speech.cancelRecording()
+                            return
+                        }
+                        let isTap = abs(value.translation.height) < 10
+                            && abs(value.translation.width) < 10
+                        if isTap {
+                            if speech.isRecording {
+                                speech.endRecording()
+                            } else {
+                                speech.beginRecording()
+                            }
+                        }
+                    }
+            )
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(speech.isRecording ? "发送，上滑取消" : "开始录音")
+            .accessibilityAction {
+                guard !isThinking, !speech.isTranscribing else { return }
+                if speech.isRecording {
+                    speech.endRecording()
+                } else {
+                    speech.beginRecording()
+                }
+            }
     }
 
     private var waveBars: some View {
@@ -295,7 +319,7 @@ struct ContentView: View {
     private var hintText: String {
         if isThinking { return "只基于你已读到的内容" }
         if tts.isSpeaking { return "轻点停止朗读" }
-        if speech.isRecording { return "再点一下发送" }
+        if speech.isRecording { return "再点发送 · 上滑取消" }
         if speech.isTranscribing { return "正在识别…" }
         return "点麦克风开始说话"
     }
