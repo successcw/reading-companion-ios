@@ -268,7 +268,8 @@ struct ContentView: View {
         let listening = speech.isRecording
         let name: String
         if talking {
-            name = tick % 2 == 0 ? "CatTalk1" : "CatTalk2"
+            let talkFrames = ["CatTalk1", "CatTalk2", "CatTalk3"]
+            name = talkFrames[tick % talkFrames.count]
         } else if listening {
             name = tick % 2 == 0 ? "CatListen1" : "CatListen2"
         } else {
@@ -280,7 +281,6 @@ struct ContentView: View {
             .frame(width: 40, height: 40)
             .clipShape(Circle())
             .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1.5))
-            .scaleEffect(talking && tick % 2 == 1 ? 1.04 : 1.0)
     }
 
     private func toggleRecording() {
