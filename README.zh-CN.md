@@ -63,6 +63,19 @@ xcodebuild -project ReadingCompanion.xcodeproj \
 
 免费 Apple ID 签名 7 天过期；TestFlight / App Store 需要 $99/年开发者账号。
 
+## 需要申请哪些 Key
+
+| 凭证 | 是否必需 | 申请/获取位置 |
+|---|---|---|
+| **OpenCode Go API Key** | 必需，用于 AI 回答 | https://opencode.ai/ |
+| **腾讯云 SecretId + SecretKey** | 可选，中文识别更好时推荐 | 先在 https://console.cloud.tencent.com/asr 开通「一句话识别」，再到 https://console.cloud.tencent.com/cam/capi 创建密钥 |
+| Apple Developer Team | 仅真机签名需要；免费 Apple ID 也可以 | Xcode → Signing & Capabilities |
+
+- 腾讯云「一句话识别」每月 **5,000 次免费**；计费说明：https://cloud.tencent.com/document/product/1093/35686/
+- 腾讯云要用语音识别的 `SecretId` / `SecretKey`，**不是** TRTC 的 `SDKAppID`。
+- App 设置里的 `Token` 只是 App 和 Kindle 插件之间的本地共享密钥，不是云服务 Key；默认 `change-me`，要改就两边一起改。
+- Apple Speech 和 Edge TTS 不需要 Key。
+
 ## App 设置
 
 - **API Key**：OpenCode Go key，存 Keychain；

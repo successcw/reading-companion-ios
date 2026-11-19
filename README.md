@@ -63,6 +63,19 @@ xcodebuild -project ReadingCompanion.xcodeproj \
 
 Free Apple ID signing expires after 7 days. TestFlight/App Store requires the paid Apple Developer Program.
 
+## What you need to apply for
+
+| Credential | Required? | Where to get it |
+|---|---|---|
+| **OpenCode Go API key** | Yes, for AI replies | https://opencode.ai/ |
+| **Tencent Cloud SecretId + SecretKey** | Optional, recommended for better Chinese ASR | Enable **一句话识别** at https://console.cloud.tencent.com/asr, then create keys at https://console.cloud.tencent.com/cam/capi |
+| Apple Developer team | Real-device signing only; a free Apple ID works | Xcode → Signing & Capabilities |
+
+- Tencent Cloud 一句话识别 has **5,000 free calls/month**; pricing: https://cloud.tencent.com/document/product/1093/35686/
+- Use the Tencent Cloud ASR `SecretId` / `SecretKey`, **not** the TRTC `SDKAppID`.
+- The `Token` in App Settings is only a local shared secret between the app and the Kindle plugin. It is not a cloud key. Default `change-me`; change it in both places if you want.
+- Apple Speech and Edge TTS need no key.
+
 ## App settings
 
 - **API Key**: OpenCode Go key, stored in the iOS Keychain.
