@@ -21,9 +21,11 @@ targets:
     info:
       path: ReadingCompanion/Info.plist
       properties:
-        CFBundleDisplayName: "AI 陪读"
+        CFBundleDisplayName: "橘猫陪读"
         CFBundleDevelopmentRegion: zh_CN
-        NSMicrophoneUsageDescription: "用于语音向 AI 陪读提问。"
+        CFBundleShortVersionString: "1.1"
+        CFBundleVersion: "2"
+        NSMicrophoneUsageDescription: "用于语音向橘猫陪读提问。"
         NSSpeechRecognitionUsageDescription: "用于把你说的话转成文字。"
         NSLocalNetworkUsageDescription: "用于接收同一热点下 Kindle 上报的阅读进度。"
         UIBackgroundModes: [audio]

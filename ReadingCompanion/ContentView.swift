@@ -21,6 +21,9 @@ struct ContentView: View {
 
     @State private var apiKey = KeychainStore.read("opencode_api_key")
     @State private var model = UserDefaults.standard.string(forKey: "llm_model") ?? "deepseek-v4.1-flash"
+    @State private var tencentSecretId = KeychainStore.read("tencent_secret_id")
+    @State private var tencentSecretKey = KeychainStore.read("tencent_secret_key")
+    @State private var tencentRegion = UserDefaults.standard.string(forKey: "tencent_region") ?? "ap-guangzhou"
     @State private var portText = UserDefaults.standard.string(forKey: "server_port") ?? "8790"
     @State private var token = UserDefaults.standard.string(forKey: "server_token") ?? "change-me"
 
@@ -76,6 +79,9 @@ struct ContentView: View {
                 tts: tts,
                 apiKey: $apiKey,
                 model: $model,
+                tencentSecretId: $tencentSecretId,
+                tencentSecretKey: $tencentSecretKey,
+                tencentRegion: $tencentRegion,
                 portText: $portText,
                 token: $token,
                 address: address,
@@ -107,7 +113,7 @@ struct ContentView: View {
     private var topBar: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("AI 陪读")
+                Text("橘猫陪读")
                     .font(.system(size: 25, weight: .semibold, design: .rounded))
                     .foregroundStyle(ink)
                 Text("读到哪，就陪你聊到哪")
@@ -228,7 +234,7 @@ struct ContentView: View {
             if tts.isSpeaking {
                 Button {
                     tts.stop()
-                    speech.resume()
+                    speech.prepare()
                 } label: {
                     Image(systemName: "stop.fill")
                         .font(.system(size: 12, weight: .bold))
@@ -238,9 +244,22 @@ struct ContentView: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Image(systemName: "pawprint.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(orange.opacity(0.75))
+                Button {
+                    if speech.isRecording {
+                        speech.endRecording()
+                    } else {
+                        speech.beginRecording()
+                    }
+                } label: {
+                    Image(systemName: speech.isRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(orange, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(isThinking || speech.isTranscribing)
+                .accessibilityLabel(speech.isRecording ? "发送" : "开始录音")
             }
         }
         .padding(.horizontal, 14)
@@ -276,7 +295,9 @@ struct ContentView: View {
     private var hintText: String {
         if isThinking { return "只基于你已读到的内容" }
         if tts.isSpeaking { return "轻点停止朗读" }
-        return "自动识别，直接说话"
+        if speech.isRecording { return "再点一下发送" }
+        if speech.isTranscribing { return "正在识别…" }
+        return "点麦克风开始说话"
     }
 
     private func setup() {
@@ -296,6 +317,9 @@ struct ContentView: View {
             speech.contextualStrings = phrases
         }
         restartServer()
+        speech.configureTencent(secretId: tencentSecretId,
+                                secretKey: tencentSecretKey,
+                                region: tencentRegion)
         speech.onUtterance = handleUtterance
         speech.start()
     }
@@ -308,7 +332,13 @@ struct ContentView: View {
 
     private func applySettings() {
         KeychainStore.save(apiKey, for: "opencode_api_key")
+        KeychainStore.save(tencentSecretId, for: "tencent_secret_id")
+        KeychainStore.save(tencentSecretKey, for: "tencent_secret_key")
         UserDefaults.standard.set(model, forKey: "llm_model")
+        UserDefaults.standard.set(tencentRegion, forKey: "tencent_region")
+        speech.configureTencent(secretId: tencentSecretId,
+                                secretKey: tencentSecretKey,
+                                region: tencentRegion)
         UserDefaults.standard.set(portText, forKey: "server_port")
         UserDefaults.standard.set(token, forKey: "server_token")
         server.token = token
@@ -348,7 +378,7 @@ struct ContentView: View {
 
         tts.beginStreaming {
             assistantID = nil
-            speech.resume()
+            speech.prepare()
         }
 
         let config = LLMConfig(baseURL: "https://opencode.ai/zen/go/v1",
@@ -377,7 +407,7 @@ struct ContentView: View {
                 }
                 assistantID = nil
                 stopRevealTimer()
-                speech.resume()
+                speech.prepare()
             }
         }
     }
@@ -390,6 +420,9 @@ struct SettingsView: View {
 
     @Binding var apiKey: String
     @Binding var model: String
+    @Binding var tencentSecretId: String
+    @Binding var tencentSecretKey: String
+    @Binding var tencentRegion: String
     @Binding var portText: String
     @Binding var token: String
     let address: String
@@ -406,6 +439,24 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Text("Base URL: https://opencode.ai/zen/go/v1")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("语音识别") {
+                    SecureField("腾讯云 SecretId", text: $tencentSecretId)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("腾讯云 SecretKey", text: $tencentSecretKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("地域", text: $tencentRegion)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Text("配置后使用腾讯云一句话识别；留空则使用 Apple Speech。密钥只存本机 Keychain。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("在「语音识别控制台 > API 密钥管理」取 SecretId / SecretKey，不是 SDKAppID。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

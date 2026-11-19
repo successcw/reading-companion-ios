@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
-	<string>AI 陪读</string>
+	<string>橘猫陪读</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -17,13 +17,13 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>1.1</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>用于接收同一热点下 Kindle 上报的阅读进度。</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>用于语音向 AI 陪读提问。</string>
+	<string>用于语音向橘猫陪读提问。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>用于把你说的话转成文字。</string>
 	<key>UIBackgroundModes</key>

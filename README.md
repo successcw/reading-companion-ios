@@ -1,16 +1,16 @@
-# Reading Companion iOS
+# 橘猫陪读 iOS
 
 **English** | [简体中文](README.zh-CN.md)
 
-A native iPhone AI reading companion for Kindle + KOReader. The iPhone hosts a small local HTTP server, receives the current page from a KOReader plugin, listens with Apple Speech, streams answers from OpenCode Go, and reads them aloud with Edge TTS (falling back to Apple's system voice).
+橘猫陪读 (Júmāo Péidú) is a native iPhone AI reading companion for Kindle + KOReader. The iPhone hosts a small local HTTP server, receives the current page from a KOReader plugin, listens with Apple Speech, streams answers from OpenCode Go, and reads them aloud with Edge TTS (falling back to Apple's system voice).
 
 > This repository contains the **iPhone app only**.
 > The Kindle/KOReader side lives at [successcw/koreader-ai-reading](https://github.com/successcw/koreader-ai-reading).
 
 ## Features
 
-- **Automatic VAD**: no press-to-talk; starts and stops on speech/silence.
-- **Apple Speech**: Chinese on-device recognition when available.
+- **Push-to-talk**: tap the mic to start, tap again to send; no always-on VAD cutting off the first or last syllable.
+- **Tencent Cloud one-sentence ASR**: optional, better Chinese accuracy; falls back to Apple Speech when no keys are configured.
 - **Local HTTP bridge**: receives book, chapter, page, progress, and page text from KOReader.
 - **OpenCode Go streaming**: `https://opencode.ai/zen/go/v1`, default model `deepseek-v4.1-flash`.
 - **Edge TTS**: sentence-by-sentence synthesis, so the first sentence starts before the full answer is written.
@@ -69,6 +69,7 @@ Free Apple ID signing expires after 7 days. TestFlight/App Store requires the pa
 - **Port**: default `8790`.
 - **Token**: default `change-me`; must match the Kindle plugin config.
 - **TTS**: Edge voice selector (Xiaoxiao, Yunxi, Xiaoyi, Yunjian, Xiaobei) plus system fallback.
+- **Tencent ASR**: SecretId / SecretKey / region, stored in the Keychain. Leave blank to use Apple Speech. Enable **一句话识别** in the Tencent Cloud console (5,000 free calls/month).
 
 Base URL is fixed to:
 
@@ -88,6 +89,7 @@ The app uses `/chat/completions` and sends the required `x-opencode-session` hea
 ## Privacy
 
 - The app receives the current page text from your Kindle and sends it to OpenCode Go for inference.
+- When Tencent ASR is configured, the recorded utterance is sent to Tencent Cloud for transcription; otherwise Apple Speech handles it.
 - Edge TTS sends the answer text to Microsoft's Edge TTS service.
 - API keys live in the Keychain; no key is committed to this repository.
 - No books, personal images, or account credentials are included in the repo.
@@ -98,6 +100,7 @@ The app uses `/chat/completions` and sends the required `x-opencode-session` hea
 - iPhone Personal Hotspot does not broadcast continuously; Kindle must connect while it is discoverable.
 - Edge TTS is an unofficial endpoint and can change; the app falls back to Apple's system TTS.
 - Apple Speech accuracy depends on language pack, microphone distance, and noise.
+- Tencent one-sentence ASR accepts up to 60 seconds / 3 MB per request; longer speech must be split.
 - This is a prototype, not an App Store-ready product.
 
 ## License

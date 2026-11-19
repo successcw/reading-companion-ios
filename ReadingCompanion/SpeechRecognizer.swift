@@ -5,8 +5,10 @@ import Speech
 final class SpeechRecognizer: NSObject, ObservableObject {
     @Published var transcript: String = ""
     @Published var isListening: Bool = false
+    @Published var isRecording: Bool = false
+    @Published var isTranscribing: Bool = false
     @Published var level: CGFloat = 0
-    @Published var status: String = "待机"
+    @Published var status: String = "点麦克风开始"
 
     var onUtterance: ((String) -> Void)?
 
@@ -19,82 +21,322 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         return nil
     }()
     var contextualStrings: [String] = []
+
     private let engine = AVAudioEngine()
-    private let audioQueue = DispatchQueue(label: "com.cg.readingcompanion.speech")
+    private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                             sampleRate: 16_000,
+                                             channels: 1,
+                                             interleaved: true)!
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var taskGeneration = 0
-    private var hasSpeech = false
-    private var speechStarted = Date()
-    private var lastVoice = Date()
-    private var paused = false
+    private var finalWatchdog: DispatchWorkItem?
+    private var converter: AVAudioConverter?
+    private var converterInputFormat: AVAudioFormat?
+    private var capturePCM = Data()
+    private var recordingStarted = Date()
+    private var lastLog = Date.distantPast
+
     private var started = false
     private var authorized = false
-    private var lastLog = Date.distantPast
+    private var speechAuthorized = false
+    private var paused = false
+    private var wantsRecording = false
+    private var pendingStart = false
     private var tapInstalled = false
 
-    private let speechThreshold: Float = 0.002
-    private let silenceSeconds: TimeInterval = 2.2
-    private let minSpeechSeconds: TimeInterval = 0.35
-    private let maxUtteranceSeconds: TimeInterval = 15
-    private var preRoll: [AVAudioPCMBuffer] = []
+    private var tencentSecretId = ""
+    private var tencentSecretKey = ""
+    private var tencentRegion = "ap-guangzhou"
+    private let tencentClient = TencentASRClient()
+
+    // Audio-session recovery state. Interruptions can happen while the user
+    // is recording; never leave the engine in a half-started state.
+    private var retryWork: DispatchWorkItem?
+    private var retryDelay: TimeInterval = 0.5
+    private var observers: [NSObjectProtocol] = []
+
+    private var tencentConfig: TencentASRConfig {
+        TencentASRConfig(secretId: tencentSecretId,
+                         secretKey: tencentSecretKey,
+                         region: tencentRegion)
+    }
+
+    private var useTencent: Bool {
+        tencentConfig.isConfigured
+    }
+
+    override init() {
+        super.init()
+        installSessionObservers()
+    }
+
+    deinit {
+        retryWork?.cancel()
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+    }
+
+    func configureTencent(secretId: String, secretKey: String, region: String) {
+        tencentSecretId = secretId.trimmingCharacters(in: .whitespacesAndNewlines)
+        tencentSecretKey = secretKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        tencentRegion = region.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "ap-guangzhou" : region.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isRecording {
+            status = "点麦克风开始"
+        }
+        print("ASR: engine \(useTencent ? "Tencent one-sentence" : "Apple Speech")")
+    }
 
     func start() {
         guard !started else { return }
         started = true
         print("ASR: start")
-        SFSpeechRecognizer.requestAuthorization { [weak self] status in
-            guard let self else { return }
-            print("ASR: speech auth \(status.rawValue)")
-            guard status == .authorized else {
-                DispatchQueue.main.async { self.status = "语音识别未授权" }
-                return
-            }
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                print("ASR: mic granted \(granted)")
-                guard granted else {
-                    DispatchQueue.main.async { self.status = "麦克风未授权" }
-                    return
-                }
+        requestMicrophone()
+    }
+
+    private func requestMicrophone() {
+        let session = AVAudioSession.sharedInstance()
+        switch session.recordPermission {
+        case .granted:
+            authorized = true
+            status = "点麦克风开始"
+            if pendingStart { beginRecording() }
+        case .denied:
+            authorized = false
+            status = "麦克风未授权"
+        default:
+            session.requestRecordPermission { [weak self] granted in
                 DispatchQueue.main.async {
-                    self.authorized = true
-                    self.configureAudio()
+                    guard let self else { return }
+                    self.authorized = granted
+                    print("ASR: mic granted \(granted)")
+                    if granted {
+                        self.status = "点麦克风开始"
+                        if self.pendingStart { self.beginRecording() }
+                    } else {
+                        self.status = "麦克风未授权"
+                    }
                 }
             }
         }
     }
 
-    private func configureAudio() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .measurement,
-                                    options: [.defaultToSpeaker])
-            try session.setActive(true, options: [])
-            // AirPods' noise cancellation often eats Chinese sentence starts and
-            // makes Apple Speech much worse in noisy rooms. Prefer the phone mic.
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try? session.setPreferredInput(builtIn)
-            }
-            let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
-            print("ASR: input route \(inputs)")
-        } catch {
-            status = "音频初始化失败"
+    func beginRecording() {
+        guard !paused, !isTranscribing else { return }
+        if isRecording {
+            endRecording()
             return
         }
 
-        installTapIfNeeded()
-        engine.prepare()
-        do {
-            try engine.start()
-            print("ASR: engine started")
-            status = "我在听"
-        } catch {
-            status = "麦克风启动失败"
+        if !authorized {
+            pendingStart = true
+            status = "正在等待麦克风权限…"
+            requestMicrophone()
+            return
+        }
+
+        if !useTencent && !speechAuthorized {
+            pendingStart = true
+            status = "正在准备语音识别…"
+            SFSpeechRecognizer.requestAuthorization { [weak self] auth in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    print("ASR: speech auth \(auth.rawValue)")
+                    guard auth == .authorized else {
+                        self.pendingStart = false
+                        self.status = "语音识别未授权"
+                        return
+                    }
+                    self.speechAuthorized = true
+                    if self.pendingStart {
+                        self.pendingStart = false
+                        self.startCapture()
+                    }
+                }
+            }
+            return
+        }
+
+        pendingStart = false
+        startCapture()
+    }
+
+    private func startCapture() {
+        guard !isRecording else { return }
+        isRecording = true
+        isListening = true
+        isTranscribing = false
+        transcript = ""
+        capturePCM.removeAll()
+        recordingStarted = Date()
+        if !useTencent {
+            beginAppleRequest()
+        }
+        status = useTencent ? "录音中，点一下发送" : "识别中，点一下发送"
+        wantsRecording = true
+        activateAndStart()
+    }
+
+    func endRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        isListening = false
+        wantsRecording = false
+        retryWork?.cancel()
+        retryWork = nil
+
+        let duration = Date().timeIntervalSince(recordingStarted)
+        guard duration >= 0.35 else {
+            resetAppleRequest()
+            stopEngineAndDeactivate()
+            isTranscribing = false
+            status = "说话时间太短"
+            return
+        }
+
+        isTranscribing = true
+        if useTencent {
+            let pcm = capturePCM
+            capturePCM.removeAll()
+            stopEngineAndDeactivate()
+            guard !pcm.isEmpty else {
+                status = "没有录到声音，点一下重试"
+                return
+            }
+            let wav = PCM16WAV.make(from: pcm)
+            guard wav.count <= 3_000_000 else {
+                status = "录音太长，请分句说"
+                return
+            }
+            status = "识别中…"
+            tencentClient.transcribe(wav: wav, config: tencentConfig) { [weak self] result in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    switch result {
+                    case let .success(text):
+                        self.deliver(text)
+                    case let .failure(error):
+                        self.isTranscribing = false
+                        self.stopEngineAndDeactivate()
+                        self.level = 0
+                        self.status = "识别失败：\(error.localizedDescription)"
+                    }
+                }
+            }
+        } else {
+            request?.endAudio()
+            stopEngineAndDeactivate()
+            status = "识别中…"
+            scheduleFinalWatchdog()
         }
     }
 
+    private func deliver(_ raw: String) {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("ASR: final \(cleaned)")
+        finalWatchdog?.cancel()
+        finalWatchdog = nil
+        taskGeneration += 1
+        task = nil
+        request = nil
+        capturePCM.removeAll()
+        DispatchQueue.main.async {
+            self.isRecording = false
+            self.isListening = false
+            self.isTranscribing = false
+            self.level = 0
+            self.status = "点麦克风开始"
+            self.transcript = ""
+            if cleaned.count >= 1 {
+                self.onUtterance?(cleaned)
+            }
+        }
+    }
+
+    private func beginAppleRequest() {
+        guard let recognizer, recognizer.isAvailable else {
+            print("ASR: recognizer unavailable")
+            status = "语音识别暂不可用"
+            return
+        }
+        print("ASR: begin request")
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+        request.taskHint = .dictation
+        if !contextualStrings.isEmpty {
+            request.contextualStrings = contextualStrings
+        }
+        // Apple's server model is noticeably better than the on-device zh-CN
+        // model for homophones and book-specific names.
+        request.requiresOnDeviceRecognition = false
+        self.request = request
+        taskGeneration += 1
+        let generation = taskGeneration
+        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self else { return }
+            if let result {
+                let text = result.bestTranscription.formattedString
+                print("ASR: partial \(text)")
+                DispatchQueue.main.async { self.transcript = text }
+                if result.isFinal {
+                    self.deliverFinal(text, generation: generation)
+                }
+            }
+            if let error {
+                print("ASR: error \(error.localizedDescription)")
+                guard generation == self.taskGeneration else { return }
+                let nsError = error as NSError
+                let noSpeech = (nsError.domain == "SFSpeechRecognizerErrorDomain" && nsError.code == 203)
+                    || error.localizedDescription.localizedCaseInsensitiveContains("No speech detected")
+                    || error.localizedDescription.contains("未检测到")
+                self.resetAppleRequest(
+                    generation: generation,
+                    status: noSpeech ? "没听清，点一下重试" : "识别失败：\(error.localizedDescription)"
+                )
+            }
+        }
+    }
+
+    private func deliverFinal(_ text: String, generation: Int) {
+        guard generation == taskGeneration else { return }
+        deliver(text)
+    }
+
+    private func resetAppleRequest(generation: Int? = nil, status: String? = nil) {
+        if let generation, generation != taskGeneration { return }
+        print("ASR: reset request")
+        finalWatchdog?.cancel()
+        finalWatchdog = nil
+        taskGeneration += 1
+        task?.cancel()
+        task = nil
+        request?.endAudio()
+        request = nil
+        capturePCM.removeAll()
+        isRecording = false
+        isListening = false
+        isTranscribing = false
+        level = 0
+        DispatchQueue.main.async {
+            self.status = status ?? "点麦克风开始"
+        }
+    }
+
+    private func scheduleFinalWatchdog() {
+        let generation = taskGeneration
+        finalWatchdog?.cancel()
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.taskGeneration else { return }
+            print("ASR: final watchdog \(self.transcript)")
+            self.deliverFinal(self.transcript, generation: generation)
+        }
+        finalWatchdog = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: watchdog)
+    }
+
     private func process(buffer: AVAudioPCMBuffer) {
-        guard authorized, !paused else { return }
+        guard authorized, wantsRecording, !paused else { return }
         guard let channel = buffer.floatChannelData?[0] else { return }
         let count = Int(buffer.frameLength)
         guard count > 0 else { return }
@@ -112,128 +354,100 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         let level = min(1, CGFloat(rms) * 18)
         DispatchQueue.main.async { self.level = level }
 
-        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength),
-              let source = buffer.floatChannelData,
-              let destination = copy.floatChannelData else { return }
-        copy.frameLength = buffer.frameLength
-        for channel in 0..<Int(buffer.format.channelCount) {
-            memcpy(destination[channel], source[channel],
-                   Int(buffer.frameLength) * MemoryLayout<Float>.size)
+        if useTencent {
+            appendPCM(buffer)
+        } else {
+            request?.append(buffer)
         }
 
-        audioQueue.async { [weak self] in
-            guard let self else { return }
-            let now = Date()
-            if !self.hasSpeech {
-                self.preRoll.append(copy)
-                if self.preRoll.count > 4 { self.preRoll.removeFirst() }
-            }
-            if rms > self.speechThreshold {
-                if !self.hasSpeech {
-                    self.hasSpeech = true
-                    self.speechStarted = now
-                    self.beginRequest()
-                    for buffered in self.preRoll {
-                        self.request?.append(buffered)
-                    }
-                    self.preRoll.removeAll()
-                    DispatchQueue.main.async { self.isListening = true; self.status = "我在听" }
-                }
-                self.lastVoice = now
-            }
-
-            // Keep feeding the recognizer during the silence grace period too.
-            // This is what preserves soft trailing syllables before endAudio().
-            if self.hasSpeech {
-                self.request?.append(copy)
-            }
-
-            if self.hasSpeech,
-               now.timeIntervalSince(self.lastVoice) > self.silenceSeconds,
-               now.timeIntervalSince(self.speechStarted) > self.minSpeechSeconds {
-                self.hasSpeech = false
-                self.finishRequest()
-            } else if self.hasSpeech,
-                      now.timeIntervalSince(self.speechStarted) > self.maxUtteranceSeconds {
-                // A long, noisy stretch with no clear pause: cut a segment so it
-                // is not merged into one giant, low-accuracy utterance.
-                self.hasSpeech = false
-                self.finishRequest()
-            }
+        // One-sentence ASR accepts at most 60 seconds. Cut automatically so the
+        // upload never exceeds the API limit.
+        if Date().timeIntervalSince(recordingStarted) >= 59 {
+            DispatchQueue.main.async { self.endRecording() }
         }
     }
 
-    private func beginRequest() {
-        guard let recognizer, recognizer.isAvailable else {
-            print("ASR: recognizer unavailable")
+    private func appendPCM(_ buffer: AVAudioPCMBuffer) {
+        let inputFormat = buffer.format
+        if converter == nil || converterInputFormat?.sampleRate != inputFormat.sampleRate
+            || converterInputFormat?.channelCount != inputFormat.channelCount {
+            converter = AVAudioConverter(from: inputFormat, to: targetFormat)
+            converterInputFormat = inputFormat
+        }
+        guard let converter else { return }
+
+        let ratio = targetFormat.sampleRate / inputFormat.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+        guard let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
+
+        var supplied = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, outStatus in
+            if supplied {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            outStatus.pointee = .haveData
+            return buffer
+        }
+        guard status == .haveData,
+              output.frameLength > 0,
+              let samples = output.int16ChannelData?[0] else {
+            if let conversionError {
+                print("ASR: conversion error \(conversionError)")
+            }
             return
         }
-        print("ASR: begin request")
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        request.taskHint = .dictation
-        if !contextualStrings.isEmpty {
-            request.contextualStrings = contextualStrings
-        }
-        // Use the Chinese on-device model when available; it is usually more
-        // accurate than the server for quiet, close-mic reading sessions.
-        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
-        self.request = request
-        taskGeneration += 1
-        let generation = taskGeneration
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            if let result {
-                let text = result.bestTranscription.formattedString
-                print("ASR: partial \(text)")
-                DispatchQueue.main.async { self.transcript = text }
-                if result.isFinal {
-                    self.deliverFinal(text, generation: generation)
-                }
-            }
-            if let error {
-                print("ASR: error \(error.localizedDescription)")
-                DispatchQueue.main.async {
-                    self.status = "识别失败：\(error.localizedDescription)"
-                }
-                self.deliverFinal(self.transcript, generation: generation)
-            }
-        }
+        capturePCM.append(Data(bytes: samples,
+                               count: Int(output.frameLength) * MemoryLayout<Int16>.size))
     }
 
-    private func deliverFinal(_ text: String, generation: Int) {
-        guard generation == taskGeneration else { return }
-        print("ASR: final \(text)")
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        taskGeneration += 1
-        task = nil
-        request = nil
-        DispatchQueue.main.async {
-            self.isListening = false
-            self.level = 0
-            self.status = "我在听"
-            if cleaned.count >= 2 {
-                self.transcript = ""
-                self.onUtterance?(cleaned)
+    private func activateAndStart() {
+        guard wantsRecording, !paused else { return }
+        retryWork?.cancel()
+        retryWork = nil
+
+        let session = AVAudioSession.sharedInstance()
+        do {
+            // Rebuild the graph on every attempt; after an interruption the old
+            // tap/engine can be stale even if start() appears to succeed.
+            stopEngine()
+            try session.setCategory(.playAndRecord, mode: .measurement,
+                                    options: [.defaultToSpeaker])
+            try session.setActive(true)
+            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+                try? session.setPreferredInput(builtIn)
             }
+            installTapIfNeeded()
+            engine.prepare()
+            try engine.start()
+            retryDelay = 0.5
+            let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+            print("ASR: engine started, input \(inputs)")
+            if isRecording {
+                status = useTencent ? "录音中，点一下发送" : "识别中，点一下发送"
+            }
+        } catch {
+            print("ASR: activate failed \(error)")
+            status = "麦克风被占用，正在恢复…"
+            scheduleRetry()
         }
     }
 
-    private func finishRequest() {
-        print("ASR: finish")
-        request?.endAudio()
-        DispatchQueue.main.async { self.isListening = false }
+    private func scheduleRetry(after delay: TimeInterval? = nil) {
+        guard wantsRecording, !paused else { return }
+        retryWork?.cancel()
+        let wait = delay ?? retryDelay
+        retryDelay = min(retryDelay * 2, 5)
+        let work = DispatchWorkItem { [weak self] in
+            self?.activateAndStart()
+        }
+        retryWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
     }
 
-    func pause() {
-        paused = true
-        taskGeneration += 1
-        request?.endAudio()
-        request = nil
-        task?.cancel()
-        task = nil
-        hasSpeech = false
+    private func stopEngine() {
         if engine.isRunning {
             engine.stop()
         }
@@ -241,31 +455,11 @@ final class SpeechRecognizer: NSObject, ObservableObject {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        print("ASR: paused")
     }
 
-    func resume() {
-        paused = false
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .measurement,
-                                    options: [.defaultToSpeaker])
-            try session.setActive(true)
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try? session.setPreferredInput(builtIn)
-            }
-        } catch {
-            status = "麦克风恢复失败"
-            return
-        }
-        installTapIfNeeded()
-        if !engine.isRunning {
-            do { try engine.start() } catch { print("ASR: resume engine failed \(error)") }
-        }
-        let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
-        print("ASR: resumed input \(inputs)")
-        status = "我在听"
+    private func stopEngineAndDeactivate() {
+        stopEngine()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
     private func installTapIfNeeded() {
@@ -273,7 +467,7 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else {
-            status = "没有可用麦克风"
+            print("ASR: no input format")
             return
         }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -283,17 +477,99 @@ final class SpeechRecognizer: NSObject, ObservableObject {
         print("ASR: tap installed")
     }
 
+    private func installSessionObservers() {
+        guard observers.isEmpty else { return }
+        let center = NotificationCenter.default
+        let session = AVAudioSession.sharedInstance()
+        observers.append(center.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] note in
+            self?.handleInterruption(note)
+        })
+        observers.append(center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleRouteChange()
+        })
+        observers.append(center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: session,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleMediaServicesReset()
+        })
+    }
+
+    private func handleInterruption(_ note: Notification) {
+        guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+
+        switch type {
+        case .began:
+            guard wantsRecording, !paused else { return }
+            print("ASR: interrupted while recording")
+            wantsRecording = false
+            isRecording = false
+            isListening = false
+            pendingStart = false
+            retryWork?.cancel()
+            retryWork = nil
+            resetAppleRequest(status: "麦克风被占用，点一下重试")
+            stopEngine()
+            level = 0
+            status = "麦克风被占用，点一下重试"
+        case .ended:
+            // Push-to-talk: do not automatically reopen the mic after a call or
+            // another recorder. The next tap will start a fresh recording.
+            print("ASR: interruption ended")
+        @unknown default:
+            break
+        }
+    }
+
+    private func handleRouteChange() {
+        guard wantsRecording, !paused else { return }
+        print("ASR: route changed, rebuilding input")
+        scheduleRetry(after: 0.2)
+    }
+
+    private func handleMediaServicesReset() {
+        guard wantsRecording, !paused else { return }
+        print("ASR: media services reset")
+        retryDelay = 0.5
+        scheduleRetry(after: 0.2)
+    }
+
+    /// Called after TTS stops. It does not open the microphone; the user must
+    /// tap the mic button to start a new utterance.
+    func prepare() {
+        paused = false
+        wantsRecording = false
+        isRecording = false
+        isListening = false
+        isTranscribing = false
+        pendingStart = false
+        retryWork?.cancel()
+        retryWork = nil
+        resetAppleRequest()
+        stopEngineAndDeactivate()
+        level = 0
+        status = "点麦克风开始"
+    }
+
+    func pause() {
+        prepare()
+    }
+
+    func resume() {
+        prepare()
+    }
+
     func stop() {
-        paused = true
-        taskGeneration += 1
-        request?.endAudio()
-        task?.cancel()
-        if engine.isRunning {
-            engine.stop()
-        }
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
+        prepare()
     }
 }

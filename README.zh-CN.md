@@ -1,16 +1,16 @@
-# Reading Companion iOS
+# 橘猫陪读 iOS
 
 [English](README.md) | **简体中文**
 
-iPhone 原生 AI 陪读 App：本地 HTTP 服务接收 Kindle 当前页，Apple Speech 自动 VAD 识别，OpenCode Go 流式回答，Edge TTS 朗读（失败自动回退系统语音）。
+橘猫陪读是 iPhone 原生 AI 陪读 App：本地 HTTP 服务接收 Kindle 当前页，Apple Speech 自动 VAD 识别，OpenCode Go 流式回答，Edge TTS 朗读（失败自动回退系统语音）。
 
 > 本仓库只包含 **iPhone App**。
 > Kindle / KOReader 侧在 [successcw/koreader-ai-reading](https://github.com/successcw/koreader-ai-reading)。
 
 ## 功能
 
-- **自动 VAD**：不用按住说话，检测到说话自动开始、静音自动结束；
-- **Apple Speech**：优先中文端上识别；
+- **点按说话**：点一下麦克风开始，再点一下发送；不再用常开 VAD，避免掐头去尾；
+- **腾讯云一句话识别**：可选，中文准确率更好；没配密钥时回退 Apple Speech；
 - **本地 HTTP 桥接**：接收书名、章节、页码、进度、当前页正文；
 - **OpenCode Go 流式回答**：`https://opencode.ai/zen/go/v1`，默认 `deepseek-v4.1-flash`；
 - **Edge TTS**：逐句合成，第一句会在全文写完前开始播放；
@@ -69,6 +69,7 @@ xcodebuild -project ReadingCompanion.xcodeproj \
 - **端口**：默认 `8790`；
 - **Token**：默认 `change-me`，必须和 Kindle 插件 `config.lua` 一致；
 - **TTS**：Edge 音色选择（晓晓/云希/晓伊/云健/晓北）+ 系统语音回退。
+- **腾讯云 ASR**：SecretId / SecretKey / 地域，存 Keychain；留空则用 Apple Speech。需要在腾讯云控制台开通「一句话识别」（每月 5000 次免费）。
 
 Base URL 固定：
 
@@ -88,6 +89,7 @@ https://opencode.ai/zen/go/v1
 ## 隐私
 
 - App 接收 Kindle 当前页正文，并发给 OpenCode Go 推理；
+- 配置腾讯云 ASR 后，录制的语音会发给腾讯云转写；未配置则走 Apple Speech；
 - Edge TTS 会把回答文本发给微软 Edge TTS 服务；
 - API key 存 Keychain，仓库不包含 key；
 - 仓库不包含书、个人图片、账号凭据。
@@ -98,6 +100,7 @@ https://opencode.ai/zen/go/v1
 - iPhone 热点不会持续广播，Kindle 需要在广播时连接；
 - Edge TTS 是非官方接口，可能变化；失败会回退系统 TTS；
 - Apple Speech 准确率受语言包、麦克风距离、噪音影响；
+- 腾讯云一句话识别单次最多 60 秒 / 3MB，长句需要分段；
 - 目前是原型，不是可直接上架 App Store 的成品。
 
 ## 许可证
